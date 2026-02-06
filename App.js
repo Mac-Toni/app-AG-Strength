@@ -1,10 +1,44 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, ScrollView, SafeAreaView, StatusBar, Alert, TextInput } from 'react-native';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { 
+  StyleSheet, Text, View, TouchableOpacity, ScrollView, 
+  SafeAreaView, StatusBar, Alert, TextInput, KeyboardAvoidingView, 
+  Platform, Clipboard 
+} from 'react-native';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+const ExercicioItem = React.memo(({ item, onToggle, onWeightChange }) => {
+  return (
+    <View style={[styles.item, item.selecionado && styles.itemSelecionado]}>
+      <TouchableOpacity 
+        style={styles.areaTextoItem}
+        onPress={() => onToggle(item.id)}
+      >
+        <Text style={[styles.textoItem, item.selecionado && styles.textoSelecionado]}>
+          {item.nome}
+        </Text>
+        {item.selecionado && <Text style={styles.check}>✅</Text>}
+      </TouchableOpacity>
+
+      <View style={styles.containerPeso}>
+        <TextInput
+          style={styles.inputPeso}
+          value={item.peso}
+          onChangeText={(texto) => onWeightChange(item.id, texto)}
+          placeholder="00"
+          placeholderTextColor="#666"
+          keyboardType="numeric"
+          maxLength={3}
+        />
+        <Text style={styles.labelPeso}>kg</Text>
+      </View>
+    </View>
+  );
+});
+
 export default function App() {
   const [grupoAtual, setGrupoAtual] = useState('Treino A');
+  const [carregando, setCarregando] = useState(true);
   
   const [treinos, setTreinos] = useState({
     'Treino A': [
@@ -61,142 +95,129 @@ export default function App() {
   });
 
   useEffect(() => {
+    const carregarDados = async () => {
+      try {
+        const dadosSalvos = await AsyncStorage.getItem('@meu_treino_dados');
+        if (dadosSalvos !== null) setTreinos(JSON.parse(dadosSalvos));
+      } catch (e) { console.log("Erro ao carregar"); }
+      finally { setCarregando(false); }
+    };
     carregarDados();
   }, []);
 
-  const carregarDados = async () => {
-    try {
-      const dadosSalvos = await AsyncStorage.getItem('@meu_treino_dados');
-      if (dadosSalvos !== null) {
-        setTreinos(JSON.parse(dadosSalvos));
-      }
-    } catch (e) {
-      console.log("Erro ao carregar dados");
+  useEffect(() => {
+    if (!carregando) {
+      AsyncStorage.setItem('@meu_treino_dados', JSON.stringify(treinos));
     }
-  };
+  }, [treinos, carregando]);
 
-  const salvarDados = async (novosTreinos) => {
-    try {
-      await AsyncStorage.setItem('@meu_treino_dados', JSON.stringify(novosTreinos));
-    } catch (e) {
-      console.log("Erro ao salvar dados");
-    }
-  };
-
-  const alternarSelecao = (id) => {
+  const alternarSelecao = useCallback((id) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    const novosTreinos = {
-      ...treinos,
-      [grupoAtual]: treinos[grupoAtual].map(ex => 
+    setTreinos(prev => ({
+      ...prev,
+      [grupoAtual]: prev[grupoAtual].map(ex => 
         ex.id === id ? { ...ex, selecionado: !ex.selecionado } : ex
       )
-    };
-    setTreinos(novosTreinos);
-    salvarDados(novosTreinos);
-  };
+    }));
+  }, [grupoAtual]);
 
-  const atualizarPeso = (id, novoPeso) => {
-    const novosTreinos = {
-      ...treinos,
-      [grupoAtual]: treinos[grupoAtual].map(ex => 
+  const atualizarPeso = useCallback((id, novoPeso) => {
+    setTreinos(prev => ({
+      ...prev,
+      [grupoAtual]: prev[grupoAtual].map(ex => 
         ex.id === id ? { ...ex, peso: novoPeso } : ex
       )
-    };
-    setTreinos(novosTreinos);
-    salvarDados(novosTreinos);
+    }));
+  }, [grupoAtual]);
+
+  const exportarBackup = () => {
+    Clipboard.setString(JSON.stringify(treinos));
+    Alert.alert("Backup Copiado! 📤", "Cole o código em um local seguro.");
+  };
+
+  const importarBackup = () => {
+    Alert.prompt("Importar Backup 📥", "Cole o código de backup:", [
+      { text: "Cancelar", style: "cancel" },
+      { text: "Confirmar", onPress: (texto) => {
+          try {
+            const dados = JSON.parse(texto);
+            if (dados['Treino A']) { setTreinos(dados); Alert.alert("Sucesso!"); }
+          } catch (e) { Alert.alert("Erro no código."); }
+      }}
+    ], "plain-text");
   };
 
   const resetarTreino = () => {
-    Alert.alert(
-      "Limpar Treino",
-      "Deseja desmarcar todos os exercícios deste treino?",
-      [
-        { text: "Cancelar", style: "cancel" },
-        { text: "Sim", onPress: () => {
-          const novosTreinos = {
-            ...treinos,
-            [grupoAtual]: treinos[grupoAtual].map(ex => ({ ...ex, selecionado: false }))
-          };
-          setTreinos(novosTreinos);
-          salvarDados(novosTreinos);
-        }}
-      ]
-    );
+    Alert.alert("Limpar Treino", `Deseja resetar o ${grupoAtual}?`, [
+      { text: "Cancelar", style: "cancel" },
+      { text: "Sim", onPress: () => {
+          setTreinos(prev => ({
+            ...prev,
+            [grupoAtual]: prev[grupoAtual].map(ex => ({ ...ex, selecionado: false }))
+          }));
+      }}
+    ]);
   };
 
   const progresso = useMemo(() => {
-    const listaAtual = treinos[grupoAtual] || [];
-    const total = listaAtual.length;
-    const concluidos = listaAtual.filter(ex => ex.selecionado).length;
-    return { total, concluidos, percentual: total > 0 ? (concluidos / total) * 100 : 0 };
+    const lista = treinos[grupoAtual] || [];
+    const concluidos = lista.filter(ex => ex.selecionado).length;
+    return { total: lista.length, concluidos, percentual: lista.length > 0 ? (concluidos / lista.length) * 100 : 0 };
   }, [treinos, grupoAtual]);
+
+  if (carregando) return null;
 
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" />
-      
-      <View style={styles.header}>
-        <Text style={styles.titulo}>🏋️ Meu Treino</Text>
-        <TouchableOpacity style={styles.botaoLimparTopo} onPress={resetarTreino}>
-          <Text style={styles.textoLimparTopo}>Limpar</Text>
-        </TouchableOpacity>
-      </View>
-      
-      <View style={styles.containerProgresso}>
-        <View style={styles.barraFundo}>
-          <View style={[styles.barraPreenchida, { width: `${progresso.percentual}%` }]} />
-        </View>
-        <Text style={styles.textoProgresso}>{progresso.concluidos} de {progresso.total} feitos</Text>
-      </View>
-
-      <View style={styles.menu}>
-        {Object.keys(treinos).map(grupo => (
-          <TouchableOpacity 
-            key={grupo} 
-            onPress={() => setGrupoAtual(grupo)}
-            style={[styles.botaoMenu, grupoAtual === grupo && styles.botaoAtivo]}
-          >
-            <Text style={[styles.textoMenu, grupoAtual === grupo && styles.textoAtivo]}>{grupo}</Text>
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
+        <View style={styles.header}>
+          <Text style={styles.titulo}>🏋️ Meu Treino</Text>
+          <TouchableOpacity style={styles.botaoLimparTopo} onPress={resetarTreino}>
+            <Text style={styles.textoLimparTopo}>Limpar</Text>
           </TouchableOpacity>
-        ))}
-      </View>
+        </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 30 }}>
-        {treinos[grupoAtual]?.map((item) => (
-          <View key={item.id} style={[styles.item, item.selecionado && styles.itemSelecionado]}>
-            <TouchableOpacity 
-              style={styles.areaTextoItem}
-              onPress={() => alternarSelecao(item.id)}
-            >
-              <Text style={[styles.textoItem, item.selecionado && styles.textoSelecionado]}>
-                {item.nome}
-              </Text>
-              {item.selecionado && <Text style={styles.check}>✅</Text>}
+        {/* Nossos novos botões de Backup */}
+        <View style={styles.containerBackup}>
+          <TouchableOpacity style={styles.botaoBackup} onPress={exportarBackup}>
+            <Text style={styles.textoBackup}>📤 Exportar Dados</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.botaoBackup} onPress={importarBackup}>
+            <Text style={styles.textoBackup}>📥 Importar Dados</Text>
+          </TouchableOpacity>
+        </View>
+        
+        <View style={styles.containerProgresso}>
+          <View style={styles.barraFundo}><View style={[styles.barraPreenchida, { width: `${progresso.percentual}%` }]} /></View>
+          <Text style={styles.textoProgresso}>{progresso.concluidos} de {progresso.total} feitos</Text>
+        </View>
+
+        <View style={styles.menu}>
+          {Object.keys(treinos).map(grupo => (
+            <TouchableOpacity key={grupo} onPress={() => setGrupoAtual(grupo)} style={[styles.botaoMenu, grupoAtual === grupo && styles.botaoAtivo]}>
+              <Text style={[styles.textoMenu, grupoAtual === grupo && styles.textoAtivo]}>{grupo}</Text>
             </TouchableOpacity>
+          ))}
+        </View>
 
-            <View style={styles.containerPeso}>
-              <TextInput
-                style={styles.inputPeso}
-                value={item.peso}
-                onChangeText={(texto) => atualizarPeso(item.id, texto)}
-                placeholder="000"
-                placeholderTextColor="#666"
-                keyboardType="numeric"
-                maxLength={3}
-              />
-              <Text style={styles.labelPeso}>kg</Text>
-            </View>
-          </View>
-        ))}
-      </ScrollView>
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 50 }}>
+          {treinos[grupoAtual]?.map((item) => (
+            <ExercicioItem key={item.id} item={item} onToggle={alternarSelecao} onWeightChange={atualizarPeso} />
+          ))}
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#121212', paddingHorizontal: 20, paddingTop: 20 },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 15, marginBottom: 15 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 15, marginBottom: 10 },
   titulo: { fontSize: 26, fontWeight: 'bold', color: '#fff' },
+  containerBackup: { flexDirection: 'row', gap: 10, marginBottom: 15 },
+  botaoBackup: { backgroundColor: '#252525', paddingVertical: 6, paddingHorizontal: 10, borderRadius: 6, borderWidth: 1, borderColor: '#444' },
+  textoBackup: { color: '#aaa', fontSize: 11, fontWeight: 'bold' },
   botaoLimparTopo: { backgroundColor: '#252525', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: '#ff3b30' },
   textoLimparTopo: { color: '#ff3b30', fontWeight: 'bold', fontSize: 14 },
   containerProgresso: { marginBottom: 15 },
@@ -215,6 +236,6 @@ const styles = StyleSheet.create({
   textoSelecionado: { color: '#007AFF', fontWeight: 'bold' },
   check: { fontSize: 14, marginLeft: 8 },
   containerPeso: { flexDirection: 'row', alignItems: 'center', marginLeft: 10, backgroundColor: '#252525', paddingHorizontal: 8, borderRadius: 6, height: 40 },
-  inputPeso: { color: '#fff', fontSize: 16, fontWeight: 'bold', textAlign: 'center', width: 40 },
+  inputPeso: { color: '#fff', fontSize: 16, fontWeight: 'bold', textAlign: 'center', width: 42 },
   labelPeso: { color: '#888', fontSize: 12, marginLeft: 2 }
 });
